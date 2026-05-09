@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\ZAINAB\\\\Documents\\\\GitHub\\\\kitchen-service\" -Recurse -Directory)",
+      "Bash(Select-Object FullName)",
+      "Bash(Sort-Object FullName)",
+      "Bash(grep -E \"\\\\.\\(java|yml|xml\\)$\")"
+    ]
+  }
+}

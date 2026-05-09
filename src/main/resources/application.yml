@@ -13,9 +13,12 @@ spring:
       group-id: kitchen-service-group
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
 
 server:
   port: 8084
+  servlet:
+    context-path: /api
 
 eureka:
   client:
@@ -28,3 +31,10 @@ logging:
   level:
     root: INFO
     com.microservices: DEBUG
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+  show-actuator: false
