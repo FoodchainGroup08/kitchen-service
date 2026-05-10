@@ -243,6 +243,155 @@ class KitchenControllerIntegrationTest {
                 .andExpect(status().isConflict());
     }
 
+    // ── GET /kitchen/queue  (header / query param) ────────────────────────────
+
+    @Test
+    void getQueueFromHeader_withHeader_returns200() throws Exception {
+        KitchenDtos.KitchenQueueResponse response = KitchenDtos.KitchenQueueResponse.builder()
+                .branchId("branch-1")
+                .received(List.of(sampleOrder("order-1", "RECEIVED")))
+                .preparing(List.of())
+                .ready(List.of())
+                .build();
+
+        when(kitchenQueueService.getQueue("branch-1")).thenReturn(response);
+
+        mockMvc.perform(get("/kitchen/queue")
+                        .header("X-User-BranchId", "branch-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.branchId").value("branch-1"))
+                .andExpect(jsonPath("$.received[0].orderId").value("order-1"));
+    }
+
+    @Test
+    void getQueueFromHeader_withQueryParam_returns200() throws Exception {
+        KitchenDtos.KitchenQueueResponse response = KitchenDtos.KitchenQueueResponse.builder()
+                .branchId("branch-2")
+                .received(List.of())
+                .preparing(List.of())
+                .ready(List.of())
+                .build();
+
+        when(kitchenQueueService.getQueue("branch-2")).thenReturn(response);
+
+        mockMvc.perform(get("/kitchen/queue").param("branchId", "branch-2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.branchId").value("branch-2"));
+    }
+
+    @Test
+    void getQueueFromHeader_queryParamTakesPriorityOverHeader() throws Exception {
+        KitchenDtos.KitchenQueueResponse response = KitchenDtos.KitchenQueueResponse.builder()
+                .branchId("branch-param")
+                .received(List.of())
+                .preparing(List.of())
+                .ready(List.of())
+                .build();
+
+        when(kitchenQueueService.getQueue("branch-param")).thenReturn(response);
+
+        mockMvc.perform(get("/kitchen/queue")
+                        .header("X-User-BranchId", "branch-header")
+                        .param("branchId", "branch-param"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.branchId").value("branch-param"));
+    }
+
+    @Test
+    void getQueueFromHeader_withoutBranchId_returns400() throws Exception {
+        mockMvc.perform(get("/kitchen/queue"))
+                .andExpect(status().isBadRequest());
+    }
+
+    // ── PATCH /kitchen/orders/{orderId}/status ────────────────────────────────
+
+    @Test
+    void updateStatus_PREPARING_delegatesToAcceptOrder() throws Exception {
+        KitchenDtos.KitchenOrder order = sampleOrder("order-1", "PREPARING");
+        when(kitchenQueueService.acceptOrder("order-1", null, null)).thenReturn(order);
+
+        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newStatus\":\"PREPARING\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PREPARING"));
+    }
+
+    @Test
+    void updateStatus_READY_delegatesToMarkReady() throws Exception {
+        KitchenDtos.KitchenOrder order = sampleOrder("order-1", "READY");
+        when(kitchenQueueService.markReady("order-1", "staff-1", "all done")).thenReturn(order);
+
+        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newStatus\":\"READY\",\"staffId\":\"staff-1\",\"notes\":\"all done\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"));
+    }
+
+    @Test
+    void updateStatus_SERVED_delegatesToServeOrder() throws Exception {
+        KitchenDtos.KitchenOrder order = sampleOrder("order-1", "READY");
+        when(kitchenQueueService.serveOrder("order-1", null, null)).thenReturn(order);
+
+        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newStatus\":\"SERVED\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void updateStatus_PICKED_UP_delegatesToPickupOrder() throws Exception {
+        KitchenDtos.KitchenOrder order = sampleOrder("order-1", "READY");
+        when(kitchenQueueService.pickupOrder("order-1", null, null)).thenReturn(order);
+
+        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newStatus\":\"PICKED_UP\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void updateStatus_caseInsensitive_PREPARING_works() throws Exception {
+        KitchenDtos.KitchenOrder order = sampleOrder("order-1", "PREPARING");
+        when(kitchenQueueService.acceptOrder("order-1", null, null)).thenReturn(order);
+
+        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newStatus\":\"preparing\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void updateStatus_invalidStatus_returns400() throws Exception {
+        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newStatus\":\"CANCELLED\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void updateStatus_orderNotFound_returns404() throws Exception {
+        when(kitchenQueueService.acceptOrder(anyString(), any(), any()))
+                .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found in kitchen queue: ghost"));
+
+        mockMvc.perform(patch("/kitchen/orders/ghost/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newStatus\":\"PREPARING\"}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void updateStatus_wrongTransition_returns409() throws Exception {
+        when(kitchenQueueService.markReady(anyString(), any(), any()))
+                .thenThrow(new ResponseStatusException(HttpStatus.CONFLICT, "Expected order in PREPARING but was RECEIVED"));
+
+        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newStatus\":\"READY\"}"))
+                .andExpect(status().isConflict());
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private KitchenDtos.KitchenOrder sampleOrder(String orderId, String status) {

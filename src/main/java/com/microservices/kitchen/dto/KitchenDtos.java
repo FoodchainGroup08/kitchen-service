@@ -1,5 +1,6 @@
 package com.microservices.kitchen.dto;
 
+import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -24,6 +25,7 @@ public class KitchenDtos {
         private BigDecimal totalAmount;
         private String orderType;    // DINE_IN, TAKEAWAY, DELIVERY
         private String tableNumber;
+        private String customerName;
         private String notes;
         private List<OrderItemEvent> items;
     }
@@ -43,23 +45,65 @@ public class KitchenDtos {
     @Data @NoArgsConstructor @AllArgsConstructor @Builder
     public static class KitchenOrder {
         private String orderId;
+        /** Alias exposed to the frontend as {@code id}. */
+        @JsonGetter("id")
+        public String getId() { return orderId; }
+
         private String customerId;
+        private String customerName;
         private String branchId;
         private String orderType;
         private String tableNumber;
         private String notes;
         private BigDecimal totalAmount;
-        private String status;           // RECEIVED, PREPARING, READY
+        /**
+         * Stored internally as uppercase (RECEIVED, PREPARING, READY).
+         * The {@link #getDisplayStatus()} getter serialises it as lowercase
+         * for the frontend.
+         */
+        private String status;
         private List<KitchenOrderItem> items;
         private LocalDateTime receivedAt;
         private LocalDateTime acceptedAt;
         private LocalDateTime readyAt;
+
+        /**
+         * Returns the status in lowercase for frontend consumption
+         * (e.g. "received", "preparing", "ready").
+         */
+        @JsonGetter("displayStatus")
+        public String getDisplayStatus() {
+            return status != null ? status.toLowerCase() : null;
+        }
+
+        /**
+         * Returns the orderType in frontend hyphenated-lowercase format
+         * (DINE_IN → "dine-in", TAKEAWAY → "takeaway", DELIVERY → "delivery").
+         */
+        @JsonGetter("displayOrderType")
+        public String getDisplayOrderType() {
+            if (orderType == null) return null;
+            return switch (orderType.toUpperCase()) {
+                case "DINE_IN" -> "dine-in";
+                case "TAKEAWAY" -> "takeaway";
+                case "DELIVERY" -> "delivery";
+                default -> orderType.toLowerCase().replace("_", "-");
+            };
+        }
     }
 
     @Data @NoArgsConstructor @AllArgsConstructor @Builder
     public static class KitchenOrderItem {
         private String menuItemId;
+        /** Alias exposed to the frontend as {@code id}. */
+        @JsonGetter("id")
+        public String getId() { return menuItemId; }
+
         private String menuItemName;
+        /** Alias exposed to the frontend as {@code name}. */
+        @JsonGetter("name")
+        public String getName() { return menuItemName; }
+
         private Integer quantity;
         private String specialInstructions;
     }
@@ -81,6 +125,10 @@ public class KitchenDtos {
         private String staffId;
         private String notes;
     }
+
+    // ── REST request for unified status update (PATCH endpoint) ──────────────
+
+    public record KitchenStatusUpdateRequest(String newStatus, String staffId, String notes) {}
 
     // ── SLA alert (used by WebSocket broadcast) ───────────────────────────────
 

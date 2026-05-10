@@ -10,17 +10,46 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 @Slf4j
 @RestController
-@RequestMapping("/kitchen")
+@RequestMapping("/v1/kitchen")
 @Tag(name = "Kitchen", description = "Kitchen display and workflow endpoints. Staff use these to view the live order queue and drive orders through the preparation lifecycle: Accept → Ready → Serve/Pickup.")
 public class KitchenController {
 
     @Autowired
     private KitchenQueueService kitchenQueueService;
+
+    // ── GET /kitchen/queue  (branchId from header or query param) ────────────
+
+    @Operation(
+        summary = "Get kitchen queue (branchId from header or query param)",
+        description = "Frontend-friendly variant: resolves branchId from the `X-User-BranchId` request header "
+            + "(set by the API gateway from the JWT) or from the `?branchId=` query parameter. "
+            + "Query param takes priority over the header. "
+            + "Returns the same payload as GET /kitchen/queue/{branchId}.",
+        security = @SecurityRequirement(name = "Bearer Authentication"))
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Live kitchen queue grouped by status"),
+        @ApiResponse(responseCode = "400", description = "branchId not provided via header or query param")
+    })
+    @GetMapping("/queue")
+    public ResponseEntity<KitchenDtos.KitchenQueueResponse> getQueueFromHeader(
+            @RequestHeader(value = "X-User-BranchId", required = false) String branchIdHeader,
+            @RequestParam(required = false) String branchId) {
+        // query param takes priority, then header
+        String resolvedBranchId = branchId != null ? branchId : branchIdHeader;
+        if (resolvedBranchId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "branchId required (header X-User-BranchId or ?branchId= query param)");
+        }
+        log.info("GET kitchen queue branchId={} (from header/param)", resolvedBranchId);
+        return ResponseEntity.ok(kitchenQueueService.getQueue(resolvedBranchId));
+    }
 
     // ── GET /kitchen/queue/{branchId} ─────────────────────────────────────────
 
@@ -140,5 +169,41 @@ public class KitchenController {
         String staffId = request != null ? request.getStaffId() : null;
         String notes   = request != null ? request.getNotes()   : null;
         return ResponseEntity.ok(kitchenQueueService.pickupOrder(orderId, staffId, notes));
+    }
+
+    // ── PATCH /kitchen/orders/{orderId}/status ────────────────────────────────
+
+    @Operation(
+        summary = "Update order status (unified)",
+        description = "Frontend-friendly single endpoint that drives an order through its full lifecycle. "
+            + "Pass `newStatus` in the request body: "
+            + "`PREPARING` — accepts the order (RECEIVED → PREPARING); "
+            + "`READY` — marks food done (PREPARING → READY); "
+            + "`SERVED` — completes a dine-in order (READY → COMPLETED); "
+            + "`PICKED_UP` — completes a takeaway/delivery order (READY → COMPLETED).",
+        security = @SecurityRequirement(name = "Bearer Authentication"))
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Status updated successfully"),
+        @ApiResponse(responseCode = "400", description = "Invalid newStatus value"),
+        @ApiResponse(responseCode = "404", description = "Order not found in kitchen queue"),
+        @ApiResponse(responseCode = "409", description = "Invalid status transition"),
+        @ApiResponse(responseCode = "502", description = "Order-service could not be reached")
+    })
+    @PatchMapping("/orders/{orderId}/status")
+    public ResponseEntity<KitchenDtos.KitchenOrder> updateStatus(
+            @Parameter(description = "UUID of the order to update", required = true)
+            @PathVariable String orderId,
+            @RequestBody KitchenDtos.KitchenStatusUpdateRequest request) {
+        log.info("PATCH kitchen order status orderId={} newStatus={}", orderId, request.newStatus());
+        String staffId = request.staffId();
+        String notes   = request.notes();
+        return switch (request.newStatus().toUpperCase()) {
+            case "PREPARING" -> ResponseEntity.ok(kitchenQueueService.acceptOrder(orderId, staffId, notes));
+            case "READY"     -> ResponseEntity.ok(kitchenQueueService.markReady(orderId, staffId, notes));
+            case "SERVED"    -> ResponseEntity.ok(kitchenQueueService.serveOrder(orderId, staffId, notes));
+            case "PICKED_UP" -> ResponseEntity.ok(kitchenQueueService.pickupOrder(orderId, staffId, notes));
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Invalid newStatus. Use: PREPARING, READY, SERVED, PICKED_UP");
+        };
     }
 }
