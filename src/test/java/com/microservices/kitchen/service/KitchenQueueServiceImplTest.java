@@ -176,13 +176,13 @@ class KitchenQueueServiceImplTest {
     }
 
     @Test
-    void acceptOrder_whenOrderAlreadyPreparing_throws409() throws Exception {
+    void acceptOrder_whenOrderAlreadyPreparing_isIdempotent() throws Exception {
         stubLoad(buildOrder(ORDER_ID, "PREPARING"));
 
-        assertThatThrownBy(() -> service.acceptOrder(ORDER_ID, null, null))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
-                        .isEqualTo(HttpStatus.CONFLICT));
+        KitchenDtos.KitchenOrder result = service.acceptOrder(ORDER_ID, null, null);
+
+        assertThat(result.getStatus()).isEqualTo("PREPARING");
+        verifyNoInteractions(restTemplate);
     }
 
     @Test

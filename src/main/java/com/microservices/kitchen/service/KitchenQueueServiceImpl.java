@@ -84,7 +84,16 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
     @Override
     public KitchenDtos.KitchenOrder acceptOrder(String orderId, String staffId, String notes) {
         KitchenDtos.KitchenOrder order = loadOrThrow(orderId);
-        assertStatus(order, "RECEIVED");
+        String st = normalizedStatus(order.getStatus());
+        // Duplicate taps / retries after a successful accept must not fail with 409.
+        if ("PREPARING".equals(st)) {
+            log.info("Order {} already PREPARING — accept is idempotent, skipping transition", orderId);
+            return order;
+        }
+        if (!"RECEIVED".equals(st)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Expected order in RECEIVED but was " + order.getStatus());
+        }
 
         order.setStatus("PREPARING");
         order.setAcceptedAt(LocalDateTime.now());
@@ -240,10 +249,19 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
     // ── Misc helpers ──────────────────────────────────────────────────────────
 
     private void assertStatus(KitchenDtos.KitchenOrder order, String expected) {
-        if (!expected.equals(order.getStatus())) {
+        String actual = normalizedStatus(order.getStatus());
+        String exp = normalizedStatus(expected);
+        if (!exp.equals(actual)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Expected order in " + expected + " but was " + order.getStatus());
         }
+    }
+
+    private static String normalizedStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return "";
+        }
+        return status.trim().toUpperCase();
     }
 
     private List<KitchenDtos.KitchenOrderItem> mapItems(List<KitchenDtos.OrderItemEvent> events) {

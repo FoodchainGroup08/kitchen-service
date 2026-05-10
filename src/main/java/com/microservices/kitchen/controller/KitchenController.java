@@ -84,7 +84,7 @@ public class KitchenController {
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Order moved to PREPARING"),
         @ApiResponse(responseCode = "404", description = "Order not found in kitchen queue"),
-        @ApiResponse(responseCode = "409", description = "Order is not in RECEIVED status"),
+        @ApiResponse(responseCode = "409", description = "Order is not in RECEIVED status (e.g. READY). Already PREPARING returns 200 — idempotent."),
         @ApiResponse(responseCode = "502", description = "Order-service could not be reached to persist the status change")
     })
     @PostMapping("/orders/{orderId}/accept")
