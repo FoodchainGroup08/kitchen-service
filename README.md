@@ -1,10 +1,16 @@
 # kitchen-service
 
-Spring Boot microservice for the FoodChain kitchen display system (KDS). Kitchen staff use this service to monitor the live order queue and drive each order through its preparation lifecycle. There is no database — all queue state lives in Redis. Orders arrive via Kafka events published by `order-service`, and every status change is broadcast to kitchen displays in real time over WebSocket (STOMP).
+Spring Boot microservice for the FoodChain kitchen display system (KDS). Kitchen staff use this service to monitor the live order queue and drive each order through its preparation lifecycle. There is no relational database — queue state lives in Redis. Orders arrive via Kafka events published by `order-service`, and status changes are broadcast to kitchen displays in real time over WebSocket (STOMP/SockJS).
 
-## Port
+## Port and routing
 
-`8084` (context path `/api`). Full base URL: `http://localhost:8084/api`
+| Item | Value |
+|------|--------|
+| **Port** | **8084** (`server.servlet.context-path` = `/api`) |
+| **Direct base** | `http://localhost:8084/api` |
+| **Via API Gateway** | `http://localhost:8080/api/v1/kitchen/...` (JWT validated at gateway; **`Authorization` is not forwarded** — use **`X-User-Id`** / **`X-User-BranchId`** / **`X-User-Role`** as injected by the gateway) |
+
+REST controllers use the **`/v1/kitchen`** prefix on this service (full path on the box: `/api/v1/kitchen/...`).
 
 ---
 
@@ -14,11 +20,11 @@ Spring Boot microservice for the FoodChain kitchen display system (KDS). Kitchen
 [Kafka: order.received]
         |
         v
-    RECEIVED  ──── POST /kitchen/orders/{id}/accept ────> PREPARING
-    (new)          PATCH /kitchen/orders/{id}/status           |
+    RECEIVED  ──── POST /v1/kitchen/orders/{id}/accept ────> PREPARING
+    (new)          PATCH /v1/kitchen/orders/{id}/status           |
                          { "newStatus": "PREPARING" }          |
-                                                    POST /kitchen/orders/{id}/ready
-                                                    PATCH /kitchen/orders/{id}/status
+                                                    POST /v1/kitchen/orders/{id}/ready
+                                                    PATCH /v1/kitchen/orders/{id}/status
                                                           { "newStatus": "READY" }
                                                                |
                                                                v
@@ -38,16 +44,16 @@ COMPLETED orders are removed from Redis entirely; `order-service` is called over
 
 ## Endpoints
 
-All paths are relative to the context root `/api`. The service is registered with Eureka as `kitchen-service` and is reachable through the API gateway.
+All paths below are relative to **`/api`** on this host (`/api/v1/kitchen/...` full path).
 
-### GET /kitchen/queue
+### GET /v1/kitchen/queue
 
 Frontend-friendly endpoint — resolves `branchId` from the gateway-injected JWT header or an explicit query param.
 
 | Detail | Value |
 |---|---|
 | Priority | `?branchId=` query param first, then `X-User-BranchId` header |
-| Auth | Bearer JWT (forwarded by gateway) |
+| Auth | Through gateway: identity headers (`X-User-BranchId`, etc.). Direct calls may use Bearer JWT if configured. |
 
 **Request headers / params**
 
@@ -70,20 +76,20 @@ Frontend-friendly endpoint — resolves `branchId` from the gateway-injected JWT
 
 ---
 
-### GET /kitchen/queue/{branchId}
+### GET /v1/kitchen/queue/{branchId}
 
 Legacy path-variable variant kept for backward compatibility.
 
 | Detail | Value |
 |---|---|
 | Path variable | `branchId` — UUID of the branch |
-| Auth | Bearer JWT |
+| Auth | Same as `/v1/kitchen/queue` |
 
 **Response 200** — same shape as above.
 
 ---
 
-### PATCH /kitchen/orders/{orderId}/status
+### PATCH /v1/kitchen/orders/{orderId}/status
 
 Unified status-update endpoint consumed by the frontend.
 
@@ -117,20 +123,22 @@ Values are matched case-insensitively.
 
 ---
 
-### POST /kitchen/orders/{orderId}/accept
+### POST /v1/kitchen/orders/{orderId}/accept
 
-Moves an order from RECEIVED -> PREPARING.
+Moves an order from RECEIVED → PREPARING.
 
 **Request body** (optional)
 ```json
 { "staffId": "...", "notes": "..." }
 ```
 
-**Responses** — 200 KitchenOrder / 404 / 409 / 502
+**Idempotency:** If the order is **already PREPARING**, this call succeeds with **200** and returns the current order (no duplicate transition / no duplicate call to order-service).
+
+**Responses** — 200 KitchenOrder / 404 / 409 (invalid transition from current state) / 502
 
 ---
 
-### POST /kitchen/orders/{orderId}/ready
+### POST /v1/kitchen/orders/{orderId}/ready
 
 Moves an order from PREPARING -> READY.
 
@@ -138,7 +146,7 @@ Moves an order from PREPARING -> READY.
 
 ---
 
-### POST /kitchen/orders/{orderId}/serve
+### POST /v1/kitchen/orders/{orderId}/serve
 
 Completes a dine-in order (READY -> COMPLETED). Removes from queue.
 
@@ -146,7 +154,7 @@ Completes a dine-in order (READY -> COMPLETED). Removes from queue.
 
 ---
 
-### POST /kitchen/orders/{orderId}/pickup
+### POST /v1/kitchen/orders/{orderId}/pickup
 
 Completes a takeaway or delivery order (READY -> COMPLETED). Removes from queue.
 
@@ -185,14 +193,14 @@ Completes a takeaway or delivery order (READY -> COMPLETED). Removes from queue.
 
 ---
 
-## Real-Time WebSocket (STOMP)
+## Real-time updates (STOMP / SockJS)
 
-The service broadcasts a lightweight update message to `/topic/kitchen/{branchId}` whenever any order in that branch changes status.
+The service registers a **SockJS** STOMP endpoint at **`/ws-kitchen`** (with servlet context `/api`, use **`http://localhost:8084/api/ws-kitchen`** or SockJS URL variant). It broadcasts to **`/topic/kitchen/{branchId}`** whenever an order in that branch changes.
 
 ```
-Endpoint : ws://localhost:8084/api/ws   (or via gateway)
-Protocol : STOMP over WebSocket
-Topic    : /topic/kitchen/{branchId}
+SockJS endpoint : http://localhost:8084/api/ws-kitchen
+Protocol        : STOMP over SockJS / WebSocket
+Subscribe topic : /topic/kitchen/{branchId}
 ```
 
 **Message payload**
@@ -200,17 +208,9 @@ Topic    : /topic/kitchen/{branchId}
 { "orderId": "uuid", "status": "PREPARING" }
 ```
 
-Connect and subscribe in the frontend:
-```javascript
-const client = new Client({ brokerURL: 'ws://gateway/api/ws' });
-client.onConnect = () => {
-  client.subscribe(`/topic/kitchen/${branchId}`, frame => {
-    const { orderId, status } = JSON.parse(frame.body);
-    // refresh the queue or update the specific card
-  });
-};
-client.activate();
-```
+Connect from the browser with SockJS + STOMP (same pattern as Spring’s kitchen UI). If you expose this through a reverse proxy or gateway, align the **SockJS URL** with however `/api/ws-kitchen` is routed.
+
+**Note:** Customer-facing raw WebSockets under **`/ws/kitchen/{branchId}`** are implemented by **notifications-service** and proxied from the gateway — see that service’s README for hook URLs.
 
 ---
 
