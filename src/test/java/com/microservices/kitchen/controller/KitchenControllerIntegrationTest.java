@@ -2,6 +2,7 @@ package com.microservices.kitchen.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microservices.kitchen.dto.KitchenDtos;
+import com.microservices.kitchen.exception.ResourceNotFoundException;
 import com.microservices.kitchen.service.KitchenQueueService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,7 +39,7 @@ class KitchenControllerIntegrationTest {
     @MockBean
     private KitchenQueueService kitchenQueueService;
 
-    // ── GET /kitchen/queue/{branchId} ─────────────────────────────────────────
+    // ── GET /v1/kitchen/queue/{branchId} ──────────────────────────────────────
 
     @Test
     void getQueue_returnsQueueGroupedByStatus() throws Exception {
@@ -51,7 +52,7 @@ class KitchenControllerIntegrationTest {
 
         when(kitchenQueueService.getQueue("branch-1")).thenReturn(response);
 
-        mockMvc.perform(get("/kitchen/queue/branch-1"))
+        mockMvc.perform(get("/v1/kitchen/queue/branch-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.branchId").value("branch-1"))
                 .andExpect(jsonPath("$.received[0].orderId").value("order-1"))
@@ -71,14 +72,14 @@ class KitchenControllerIntegrationTest {
 
         when(kitchenQueueService.getQueue("branch-99")).thenReturn(response);
 
-        mockMvc.perform(get("/kitchen/queue/branch-99"))
+        mockMvc.perform(get("/v1/kitchen/queue/branch-99"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.received").isEmpty())
                 .andExpect(jsonPath("$.preparing").isEmpty())
                 .andExpect(jsonPath("$.ready").isEmpty());
     }
 
-    // ── POST /kitchen/orders/{orderId}/accept ─────────────────────────────────
+    // ── POST /v1/kitchen/orders/{orderId}/accept ──────────────────────────────
 
     @Test
     void acceptOrder_withStaffBody_returnsPreparingOrder() throws Exception {
@@ -87,7 +88,7 @@ class KitchenControllerIntegrationTest {
 
         when(kitchenQueueService.acceptOrder("order-1", "staff-1", "starting now")).thenReturn(order);
 
-        mockMvc.perform(post("/kitchen/orders/order-1/accept")
+        mockMvc.perform(post("/v1/kitchen/orders/order-1/accept")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))
                 .andExpect(status().isOk())
@@ -101,7 +102,7 @@ class KitchenControllerIntegrationTest {
 
         when(kitchenQueueService.acceptOrder("order-1", null, null)).thenReturn(order);
 
-        mockMvc.perform(post("/kitchen/orders/order-1/accept"))
+        mockMvc.perform(post("/v1/kitchen/orders/order-1/accept"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PREPARING"));
     }
@@ -111,7 +112,7 @@ class KitchenControllerIntegrationTest {
         when(kitchenQueueService.acceptOrder(anyString(), any(), any()))
                 .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found in kitchen queue: missing"));
 
-        mockMvc.perform(post("/kitchen/orders/missing/accept"))
+        mockMvc.perform(post("/v1/kitchen/orders/missing/accept"))
                 .andExpect(status().isNotFound());
     }
 
@@ -120,7 +121,7 @@ class KitchenControllerIntegrationTest {
         when(kitchenQueueService.acceptOrder(anyString(), any(), any()))
                 .thenThrow(new ResponseStatusException(HttpStatus.CONFLICT, "Expected order in RECEIVED but was PREPARING"));
 
-        mockMvc.perform(post("/kitchen/orders/order-1/accept"))
+        mockMvc.perform(post("/v1/kitchen/orders/order-1/accept"))
                 .andExpect(status().isConflict());
     }
 
@@ -129,11 +130,11 @@ class KitchenControllerIntegrationTest {
         when(kitchenQueueService.acceptOrder(anyString(), any(), any()))
                 .thenThrow(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Order-service unavailable"));
 
-        mockMvc.perform(post("/kitchen/orders/order-1/accept"))
+        mockMvc.perform(post("/v1/kitchen/orders/order-1/accept"))
                 .andExpect(status().isBadGateway());
     }
 
-    // ── POST /kitchen/orders/{orderId}/ready ──────────────────────────────────
+    // ── POST /v1/kitchen/orders/{orderId}/ready ───────────────────────────────
 
     @Test
     void markReady_withBody_returnsReadyOrder() throws Exception {
@@ -142,7 +143,7 @@ class KitchenControllerIntegrationTest {
 
         when(kitchenQueueService.markReady("order-2", "staff-2", null)).thenReturn(order);
 
-        mockMvc.perform(post("/kitchen/orders/order-2/ready")
+        mockMvc.perform(post("/v1/kitchen/orders/order-2/ready")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))
                 .andExpect(status().isOk())
@@ -155,7 +156,7 @@ class KitchenControllerIntegrationTest {
         when(kitchenQueueService.markReady(anyString(), any(), any()))
                 .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
 
-        mockMvc.perform(post("/kitchen/orders/ghost/ready"))
+        mockMvc.perform(post("/v1/kitchen/orders/ghost/ready"))
                 .andExpect(status().isNotFound());
     }
 
@@ -164,11 +165,11 @@ class KitchenControllerIntegrationTest {
         when(kitchenQueueService.markReady(anyString(), any(), any()))
                 .thenThrow(new ResponseStatusException(HttpStatus.CONFLICT, "Expected order in PREPARING but was RECEIVED"));
 
-        mockMvc.perform(post("/kitchen/orders/order-1/ready"))
+        mockMvc.perform(post("/v1/kitchen/orders/order-1/ready"))
                 .andExpect(status().isConflict());
     }
 
-    // ── POST /kitchen/orders/{orderId}/serve ──────────────────────────────────
+    // ── POST /v1/kitchen/orders/{orderId}/serve ───────────────────────────────
 
     @Test
     void serveOrder_returnsOrderWithBranchId() throws Exception {
@@ -177,7 +178,7 @@ class KitchenControllerIntegrationTest {
 
         when(kitchenQueueService.serveOrder("order-3", "staff-3", "table 5")).thenReturn(order);
 
-        mockMvc.perform(post("/kitchen/orders/order-3/serve")
+        mockMvc.perform(post("/v1/kitchen/orders/order-3/serve")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))
                 .andExpect(status().isOk())
@@ -190,7 +191,7 @@ class KitchenControllerIntegrationTest {
         when(kitchenQueueService.serveOrder(anyString(), any(), any()))
                 .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
 
-        mockMvc.perform(post("/kitchen/orders/ghost/serve"))
+        mockMvc.perform(post("/v1/kitchen/orders/ghost/serve"))
                 .andExpect(status().isNotFound());
     }
 
@@ -199,7 +200,7 @@ class KitchenControllerIntegrationTest {
         when(kitchenQueueService.serveOrder(anyString(), any(), any()))
                 .thenThrow(new ResponseStatusException(HttpStatus.CONFLICT, "Expected order in READY but was PREPARING"));
 
-        mockMvc.perform(post("/kitchen/orders/order-1/serve"))
+        mockMvc.perform(post("/v1/kitchen/orders/order-1/serve"))
                 .andExpect(status().isConflict());
     }
 
@@ -208,11 +209,11 @@ class KitchenControllerIntegrationTest {
         when(kitchenQueueService.serveOrder(anyString(), any(), any()))
                 .thenThrow(new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Order-service unavailable"));
 
-        mockMvc.perform(post("/kitchen/orders/order-1/serve"))
+        mockMvc.perform(post("/v1/kitchen/orders/order-1/serve"))
                 .andExpect(status().isBadGateway());
     }
 
-    // ── POST /kitchen/orders/{orderId}/pickup ─────────────────────────────────
+    // ── POST /v1/kitchen/orders/{orderId}/pickup ──────────────────────────────
 
     @Test
     void pickupOrder_withoutBody_returnsOrder() throws Exception {
@@ -220,7 +221,7 @@ class KitchenControllerIntegrationTest {
 
         when(kitchenQueueService.pickupOrder("order-4", null, null)).thenReturn(order);
 
-        mockMvc.perform(post("/kitchen/orders/order-4/pickup"))
+        mockMvc.perform(post("/v1/kitchen/orders/order-4/pickup"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.orderId").value("order-4"));
     }
@@ -230,7 +231,7 @@ class KitchenControllerIntegrationTest {
         when(kitchenQueueService.pickupOrder(anyString(), any(), any()))
                 .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
 
-        mockMvc.perform(post("/kitchen/orders/ghost/pickup"))
+        mockMvc.perform(post("/v1/kitchen/orders/ghost/pickup"))
                 .andExpect(status().isNotFound());
     }
 
@@ -239,11 +240,11 @@ class KitchenControllerIntegrationTest {
         when(kitchenQueueService.pickupOrder(anyString(), any(), any()))
                 .thenThrow(new ResponseStatusException(HttpStatus.CONFLICT, "Expected order in READY but was RECEIVED"));
 
-        mockMvc.perform(post("/kitchen/orders/order-1/pickup"))
+        mockMvc.perform(post("/v1/kitchen/orders/order-1/pickup"))
                 .andExpect(status().isConflict());
     }
 
-    // ── GET /kitchen/queue  (header / query param) ────────────────────────────
+    // ── GET /v1/kitchen/queue  (header / query param) ─────────────────────────
 
     @Test
     void getQueueFromHeader_withHeader_returns200() throws Exception {
@@ -256,7 +257,7 @@ class KitchenControllerIntegrationTest {
 
         when(kitchenQueueService.getQueue("branch-1")).thenReturn(response);
 
-        mockMvc.perform(get("/kitchen/queue")
+        mockMvc.perform(get("/v1/kitchen/queue")
                         .header("X-User-BranchId", "branch-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.branchId").value("branch-1"))
@@ -274,7 +275,7 @@ class KitchenControllerIntegrationTest {
 
         when(kitchenQueueService.getQueue("branch-2")).thenReturn(response);
 
-        mockMvc.perform(get("/kitchen/queue").param("branchId", "branch-2"))
+        mockMvc.perform(get("/v1/kitchen/queue").param("branchId", "branch-2"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.branchId").value("branch-2"));
     }
@@ -290,7 +291,7 @@ class KitchenControllerIntegrationTest {
 
         when(kitchenQueueService.getQueue("branch-param")).thenReturn(response);
 
-        mockMvc.perform(get("/kitchen/queue")
+        mockMvc.perform(get("/v1/kitchen/queue")
                         .header("X-User-BranchId", "branch-header")
                         .param("branchId", "branch-param"))
                 .andExpect(status().isOk())
@@ -299,18 +300,18 @@ class KitchenControllerIntegrationTest {
 
     @Test
     void getQueueFromHeader_withoutBranchId_returns400() throws Exception {
-        mockMvc.perform(get("/kitchen/queue"))
+        mockMvc.perform(get("/v1/kitchen/queue"))
                 .andExpect(status().isBadRequest());
     }
 
-    // ── PATCH /kitchen/orders/{orderId}/status ────────────────────────────────
+    // ── PATCH /v1/kitchen/orders/{orderId}/status ─────────────────────────────
 
     @Test
     void updateStatus_PREPARING_delegatesToAcceptOrder() throws Exception {
         KitchenDtos.KitchenOrder order = sampleOrder("order-1", "PREPARING");
         when(kitchenQueueService.acceptOrder("order-1", null, null)).thenReturn(order);
 
-        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+        mockMvc.perform(patch("/v1/kitchen/orders/order-1/status")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"newStatus\":\"PREPARING\"}"))
                 .andExpect(status().isOk())
@@ -322,7 +323,7 @@ class KitchenControllerIntegrationTest {
         KitchenDtos.KitchenOrder order = sampleOrder("order-1", "READY");
         when(kitchenQueueService.markReady("order-1", "staff-1", "all done")).thenReturn(order);
 
-        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+        mockMvc.perform(patch("/v1/kitchen/orders/order-1/status")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"newStatus\":\"READY\",\"staffId\":\"staff-1\",\"notes\":\"all done\"}"))
                 .andExpect(status().isOk())
@@ -334,7 +335,7 @@ class KitchenControllerIntegrationTest {
         KitchenDtos.KitchenOrder order = sampleOrder("order-1", "READY");
         when(kitchenQueueService.serveOrder("order-1", null, null)).thenReturn(order);
 
-        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+        mockMvc.perform(patch("/v1/kitchen/orders/order-1/status")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"newStatus\":\"SERVED\"}"))
                 .andExpect(status().isOk());
@@ -345,7 +346,7 @@ class KitchenControllerIntegrationTest {
         KitchenDtos.KitchenOrder order = sampleOrder("order-1", "READY");
         when(kitchenQueueService.pickupOrder("order-1", null, null)).thenReturn(order);
 
-        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+        mockMvc.perform(patch("/v1/kitchen/orders/order-1/status")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"newStatus\":\"PICKED_UP\"}"))
                 .andExpect(status().isOk());
@@ -356,7 +357,7 @@ class KitchenControllerIntegrationTest {
         KitchenDtos.KitchenOrder order = sampleOrder("order-1", "PREPARING");
         when(kitchenQueueService.acceptOrder("order-1", null, null)).thenReturn(order);
 
-        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+        mockMvc.perform(patch("/v1/kitchen/orders/order-1/status")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"newStatus\":\"preparing\"}"))
                 .andExpect(status().isOk());
@@ -364,7 +365,7 @@ class KitchenControllerIntegrationTest {
 
     @Test
     void updateStatus_invalidStatus_returns400() throws Exception {
-        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+        mockMvc.perform(patch("/v1/kitchen/orders/order-1/status")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"newStatus\":\"CANCELLED\"}"))
                 .andExpect(status().isBadRequest());
@@ -375,7 +376,7 @@ class KitchenControllerIntegrationTest {
         when(kitchenQueueService.acceptOrder(anyString(), any(), any()))
                 .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found in kitchen queue: ghost"));
 
-        mockMvc.perform(patch("/kitchen/orders/ghost/status")
+        mockMvc.perform(patch("/v1/kitchen/orders/ghost/status")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"newStatus\":\"PREPARING\"}"))
                 .andExpect(status().isNotFound());
@@ -386,10 +387,64 @@ class KitchenControllerIntegrationTest {
         when(kitchenQueueService.markReady(anyString(), any(), any()))
                 .thenThrow(new ResponseStatusException(HttpStatus.CONFLICT, "Expected order in PREPARING but was RECEIVED"));
 
-        mockMvc.perform(patch("/kitchen/orders/order-1/status")
+        mockMvc.perform(patch("/v1/kitchen/orders/order-1/status")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"newStatus\":\"READY\"}"))
                 .andExpect(status().isConflict());
+    }
+
+    // ── new: validation / structured error body tests ─────────────────────────
+
+    @Test
+    void updateStatus_returns400_whenNewStatusIsBlank() throws Exception {
+        mockMvc.perform(patch("/v1/kitchen/orders/order-1/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newStatus\":\"\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Validation Failed"))
+                .andExpect(jsonPath("$.fields.newStatus").exists());
+    }
+
+    @Test
+    void getQueue_returns400_whenBranchIdIsMissing() throws Exception {
+        mockMvc.perform(get("/v1/kitchen/queue"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400));
+    }
+
+    @Test
+    void acceptOrder_returns404_whenOrderNotFound_hasStructuredBody() throws Exception {
+        when(kitchenQueueService.acceptOrder(anyString(), any(), any()))
+                .thenThrow(new ResourceNotFoundException("Order not found in kitchen queue: missing"));
+
+        mockMvc.perform(post("/v1/kitchen/orders/missing/accept"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.error").value("Not Found"))
+                .andExpect(jsonPath("$.path").value("/v1/kitchen/orders/missing/accept"))
+                .andExpect(jsonPath("$.message").value("Order not found in kitchen queue: missing"));
+    }
+
+    @Test
+    void acceptOrder_returns409_forInvalidStatusTransition() throws Exception {
+        when(kitchenQueueService.acceptOrder(anyString(), any(), any()))
+                .thenThrow(new IllegalStateException("Expected order in RECEIVED but was PREPARING"));
+
+        mockMvc.perform(post("/v1/kitchen/orders/order-1/accept"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value("Conflict"))
+                .andExpect(jsonPath("$.message").value("Expected order in RECEIVED but was PREPARING"));
+    }
+
+    @Test
+    void updateStatus_returns400_forUnrecognisedStatus() throws Exception {
+        mockMvc.perform(patch("/v1/kitchen/orders/order-1/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newStatus\":\"INVENTED_STATUS\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400));
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

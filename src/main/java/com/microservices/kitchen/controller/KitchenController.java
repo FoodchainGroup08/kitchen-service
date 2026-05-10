@@ -15,6 +15,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import jakarta.validation.Valid;
+
 @Slf4j
 @RestController
 @RequestMapping("/v1/kitchen")
@@ -193,7 +195,7 @@ public class KitchenController {
     public ResponseEntity<KitchenDtos.KitchenOrder> updateStatus(
             @Parameter(description = "UUID of the order to update", required = true)
             @PathVariable String orderId,
-            @RequestBody KitchenDtos.KitchenStatusUpdateRequest request) {
+            @Valid @RequestBody KitchenDtos.KitchenStatusUpdateRequest request) {
         log.info("PATCH kitchen order status orderId={} newStatus={}", orderId, request.newStatus());
         String staffId = request.staffId();
         String notes   = request.notes();

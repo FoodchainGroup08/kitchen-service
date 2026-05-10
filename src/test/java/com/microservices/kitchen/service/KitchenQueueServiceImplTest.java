@@ -2,6 +2,7 @@ package com.microservices.kitchen.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microservices.kitchen.dto.KitchenDtos;
+import com.microservices.kitchen.exception.ResourceNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -170,9 +171,8 @@ class KitchenQueueServiceImplTest {
         when(valueOps.get(ORDER_KEY)).thenReturn(null);
 
         assertThatThrownBy(() -> service.acceptOrder(ORDER_ID, null, null))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
-                        .isEqualTo(HttpStatus.NOT_FOUND));
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining(ORDER_ID);
     }
 
     @Test
@@ -220,9 +220,8 @@ class KitchenQueueServiceImplTest {
         when(valueOps.get(ORDER_KEY)).thenReturn(null);
 
         assertThatThrownBy(() -> service.markReady(ORDER_ID, null, null))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
-                        .isEqualTo(HttpStatus.NOT_FOUND));
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining(ORDER_ID);
     }
 
     @Test
@@ -278,9 +277,8 @@ class KitchenQueueServiceImplTest {
         when(valueOps.get(ORDER_KEY)).thenReturn(null);
 
         assertThatThrownBy(() -> service.serveOrder(ORDER_ID, null, null))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
-                        .isEqualTo(HttpStatus.NOT_FOUND));
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining(ORDER_ID);
     }
 
     @Test
@@ -334,9 +332,8 @@ class KitchenQueueServiceImplTest {
         when(valueOps.get(ORDER_KEY)).thenReturn(null);
 
         assertThatThrownBy(() -> service.pickupOrder(ORDER_ID, null, null))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
-                        .isEqualTo(HttpStatus.NOT_FOUND));
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining(ORDER_ID);
     }
 
     @Test
@@ -359,6 +356,39 @@ class KitchenQueueServiceImplTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
                         .isEqualTo(HttpStatus.BAD_GATEWAY));
+    }
+
+    // ── new: getOrderFromQueue / updateStatus / invalid transition ────────────
+
+    @Test
+    void getOrderFromQueue_throws_ResourceNotFoundException_forUnknownOrderId() {
+        when(valueOps.get("kitchen:order:unknown-order")).thenReturn(null);
+
+        assertThatThrownBy(() -> service.acceptOrder("unknown-order", null, null))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("unknown-order");
+    }
+
+    @Test
+    void acceptOrder_throws_forInvalidStatusTransition() throws Exception {
+        // Accepting an already-COMPLETED order is represented as anything not RECEIVED;
+        // use a READY order to exercise the assertStatus guard.
+        stubLoad(buildOrder(ORDER_ID, "READY"));
+
+        assertThatThrownBy(() -> service.acceptOrder(ORDER_ID, null, null))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    @Test
+    void updateStatus_throws_forUnknownOrderId() {
+        // markReady delegates to loadOrThrow which throws ResourceNotFoundException
+        when(valueOps.get("kitchen:order:ghost")).thenReturn(null);
+
+        assertThatThrownBy(() -> service.markReady("ghost", null, null))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("ghost");
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ package com.microservices.kitchen.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microservices.kitchen.dto.KitchenDtos;
+import com.microservices.kitchen.exception.ResourceNotFoundException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -145,8 +146,7 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
     private KitchenDtos.KitchenOrder loadOrThrow(String orderId) {
         String json = redisTemplate.opsForValue().get(ORDER_KEY + orderId);
         if (json == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
-                    "Order not found in kitchen queue: " + orderId);
+            throw new ResourceNotFoundException("Order not found in kitchen queue: " + orderId);
         }
         try {
             return objectMapper.readValue(json, KitchenDtos.KitchenOrder.class);

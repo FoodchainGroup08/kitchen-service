@@ -2,6 +2,7 @@ package com.microservices.kitchen.dto;
 
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -128,7 +129,10 @@ public class KitchenDtos {
 
     // ── REST request for unified status update (PATCH endpoint) ──────────────
 
-    public record KitchenStatusUpdateRequest(String newStatus, String staffId, String notes) {}
+    public record KitchenStatusUpdateRequest(
+            @NotBlank(message = "newStatus must not be blank") String newStatus,
+            String staffId,
+            String notes) {}
 
     // ── SLA alert (used by WebSocket broadcast) ───────────────────────────────
 
