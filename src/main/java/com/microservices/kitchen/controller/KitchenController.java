@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -85,6 +86,7 @@ public class KitchenController {
         @ApiResponse(responseCode = "409", description = "Order is not in RECEIVED status"),
         @ApiResponse(responseCode = "502", description = "Order-service could not be reached to persist the status change")
     })
+    @PreAuthorize("hasAnyRole('KITCHEN_STAFF','HEAD_OFFICE_ADMIN')")
     @PostMapping("/orders/{orderId}/accept")
     public ResponseEntity<KitchenDtos.KitchenOrder> acceptOrder(
             @Parameter(description = "UUID of the order to accept", required = true)
@@ -110,6 +112,7 @@ public class KitchenController {
         @ApiResponse(responseCode = "409", description = "Order is not in PREPARING status"),
         @ApiResponse(responseCode = "502", description = "Order-service could not be reached")
     })
+    @PreAuthorize("hasAnyRole('KITCHEN_STAFF','HEAD_OFFICE_ADMIN')")
     @PostMapping("/orders/{orderId}/ready")
     public ResponseEntity<KitchenDtos.KitchenOrder> markReady(
             @Parameter(description = "UUID of the order to mark ready", required = true)
@@ -135,6 +138,7 @@ public class KitchenController {
         @ApiResponse(responseCode = "409", description = "Order is not in READY status"),
         @ApiResponse(responseCode = "502", description = "Order-service could not be reached")
     })
+    @PreAuthorize("hasAnyRole('KITCHEN_STAFF','HEAD_OFFICE_ADMIN')")
     @PostMapping("/orders/{orderId}/serve")
     public ResponseEntity<KitchenDtos.KitchenOrder> serveOrder(
             @Parameter(description = "UUID of the order to serve", required = true)
@@ -160,6 +164,7 @@ public class KitchenController {
         @ApiResponse(responseCode = "409", description = "Order is not in READY status"),
         @ApiResponse(responseCode = "502", description = "Order-service could not be reached")
     })
+    @PreAuthorize("hasAnyRole('KITCHEN_STAFF','HEAD_OFFICE_ADMIN')")
     @PostMapping("/orders/{orderId}/pickup")
     public ResponseEntity<KitchenDtos.KitchenOrder> pickupOrder(
             @Parameter(description = "UUID of the order to mark as picked up", required = true)
@@ -189,6 +194,7 @@ public class KitchenController {
         @ApiResponse(responseCode = "409", description = "Invalid status transition"),
         @ApiResponse(responseCode = "502", description = "Order-service could not be reached")
     })
+    @PreAuthorize("hasAnyRole('KITCHEN_STAFF','HEAD_OFFICE_ADMIN')")
     @PatchMapping("/orders/{orderId}/status")
     public ResponseEntity<KitchenDtos.KitchenOrder> updateStatus(
             @Parameter(description = "UUID of the order to update", required = true)

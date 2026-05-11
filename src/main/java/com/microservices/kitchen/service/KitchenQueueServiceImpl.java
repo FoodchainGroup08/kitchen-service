@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -212,10 +213,13 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
                     .updatedBy(updatedBy)
                     .notes(notes)
                     .build();
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("X-User-Id", "kitchen-service");
+            headers.set("X-User-Role", "KITCHEN_STAFF");
             restTemplate.exchange(
                     "http://order-service/api/orders/{orderId}/status",
                     HttpMethod.PUT,
-                    new HttpEntity<>(body),
+                    new HttpEntity<>(body, headers),
                     Void.class,
                     orderId);
         } catch (Exception e) {
