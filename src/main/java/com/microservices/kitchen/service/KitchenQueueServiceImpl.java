@@ -217,7 +217,7 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
             headers.set("X-User-Id", "kitchen-service");
             headers.set("X-User-Role", "KITCHEN_STAFF");
             restTemplate.exchange(
-                    "http://order-service/api/orders/{orderId}/status",
+                    "http://order-service/api/v1/orders/{orderId}/status",
                     HttpMethod.PUT,
                     new HttpEntity<>(body, headers),
                     Void.class,
