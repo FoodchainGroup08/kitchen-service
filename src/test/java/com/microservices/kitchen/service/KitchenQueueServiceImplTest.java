@@ -43,6 +43,7 @@ class KitchenQueueServiceImplTest {
 
     private static final String ORDER_ID  = "order-123";
     private static final String BRANCH_ID = "branch-456";
+    private static final String ORDER_STATUS_URL = "http://order-service/api/v1/orders/{orderId}/status";
 
     private static final String ORDER_KEY  = "kitchen:order:" + ORDER_ID;
     private static final String RECEIVED_KEY  = "kitchen:branch:" + BRANCH_ID + ":received";
@@ -150,7 +151,7 @@ class KitchenQueueServiceImplTest {
         assertThat(result.getAcceptedAt()).isNotNull();
         verify(zsetOps).remove(RECEIVED_KEY, ORDER_ID);
         verify(zsetOps).add(eq(PREPARING_KEY), eq(ORDER_ID), anyDouble());
-        verify(restTemplate).exchange(anyString(), eq(HttpMethod.PUT), any(HttpEntity.class), eq(Void.class), eq(ORDER_ID));
+        verify(restTemplate).exchange(eq(ORDER_STATUS_URL), eq(HttpMethod.PUT), any(HttpEntity.class), eq(Void.class), eq(ORDER_ID));
         verify(ws).convertAndSend(eq("/topic/kitchen/" + BRANCH_ID), contains("PREPARING"));
     }
 
