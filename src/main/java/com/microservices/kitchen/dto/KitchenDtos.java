@@ -111,11 +111,21 @@ public class KitchenDtos {
     // ── REST responses ────────────────────────────────────────────────────────
 
     @Data @NoArgsConstructor @AllArgsConstructor @Builder
+    public static class StatusGroup {
+        private long total;
+        private int page;
+        private int size;
+        private List<KitchenOrder> orders;
+    }
+
+    @Data @NoArgsConstructor @AllArgsConstructor @Builder
     public static class KitchenQueueResponse {
         private String branchId;
-        private List<KitchenOrder> received;
-        private List<KitchenOrder> preparing;
-        private List<KitchenOrder> ready;
+        private int page;
+        private int size;
+        private StatusGroup received;
+        private StatusGroup preparing;
+        private StatusGroup ready;
     }
 
     // ── REST request for kitchen actions ──────────────────────────────────────

@@ -11,6 +11,9 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -30,10 +33,15 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
     private static final String   ORDER_KEY    = "kitchen:order:";
     private static final String   BRANCH_KEY   = "kitchen:branch:";
 
+    @Value("${app.order-service.url:http://order-service:8083}")
+    private String orderServiceUrl;
+
     @Autowired private StringRedisTemplate    redisTemplate;
     @Autowired private ObjectMapper           objectMapper;
     @Autowired private SimpMessagingTemplate  ws;
-    @Autowired private RestTemplate           restTemplate;
+    @Autowired private RestTemplate           restTemplate;           // load-balanced (Eureka)
+    @Autowired @Qualifier("directRestTemplate")
+    private RestTemplate directRestTemplate;                          // Docker bridge DNS
 
     // ── Kafka ingest ──────────────────────────────────────────────────────────
 
@@ -70,12 +78,14 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
     // ── Queue read ────────────────────────────────────────────────────────────
 
     @Override
-    public KitchenDtos.KitchenQueueResponse getQueue(String branchId) {
+    public KitchenDtos.KitchenQueueResponse getQueue(String branchId, int page, int size) {
         return KitchenDtos.KitchenQueueResponse.builder()
                 .branchId(branchId)
-                .received(fetchByStatus(branchId, "received"))
-                .preparing(fetchByStatus(branchId, "preparing"))
-                .ready(fetchByStatus(branchId, "ready"))
+                .page(page)
+                .size(size)
+                .received(fetchByStatus(branchId, "received", page, size))
+                .preparing(fetchByStatus(branchId, "preparing", page, size))
+                .ready(fetchByStatus(branchId, "ready", page, size))
                 .build();
     }
 
@@ -86,12 +96,14 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
         KitchenDtos.KitchenOrder order = loadOrThrow(orderId);
         assertStatus(order, "RECEIVED");
 
+        // Call order-service first — if it fails, Redis is not mutated so staff can retry
+        callOrderService(orderId, "PREPARING", coalesce(staffId, "kitchen"), notes);
+
         order.setStatus("PREPARING");
         order.setAcceptedAt(LocalDateTime.now());
         saveOrder(order);
         moveInZSet(order.getBranchId(), orderId, "received", "preparing", toScore(order.getAcceptedAt()));
 
-        callOrderService(orderId, "PREPARING", coalesce(staffId, "kitchen"), notes);
         broadcast(order.getBranchId(), "PREPARING", orderId);
         log.info("Order {} accepted → PREPARING", orderId);
         return order;
@@ -102,12 +114,13 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
         KitchenDtos.KitchenOrder order = loadOrThrow(orderId);
         assertStatus(order, "PREPARING");
 
+        callOrderService(orderId, "READY", coalesce(staffId, "kitchen"), notes);
+
         order.setStatus("READY");
         order.setReadyAt(LocalDateTime.now());
         saveOrder(order);
         moveInZSet(order.getBranchId(), orderId, "preparing", "ready", toScore(order.getReadyAt()));
 
-        callOrderService(orderId, "READY", coalesce(staffId, "kitchen"), notes);
         broadcast(order.getBranchId(), "READY", orderId);
         log.info("Order {} marked → READY", orderId);
         return order;
@@ -118,9 +131,9 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
         KitchenDtos.KitchenOrder order = loadOrThrow(orderId);
         assertStatus(order, "READY");
 
-        removeFromQueue(order.getBranchId(), orderId, "ready");
         callOrderService(orderId, "COMPLETED",
                 coalesce(staffId, "kitchen"), coalesce(notes, "Served at table"));
+        removeFromQueue(order.getBranchId(), orderId, "ready");
         broadcast(order.getBranchId(), "COMPLETED", orderId);
         deleteOrder(orderId);
         log.info("Order {} served → COMPLETED", orderId);
@@ -132,9 +145,9 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
         KitchenDtos.KitchenOrder order = loadOrThrow(orderId);
         assertStatus(order, "READY");
 
-        removeFromQueue(order.getBranchId(), orderId, "ready");
         callOrderService(orderId, "COMPLETED",
                 coalesce(staffId, "kitchen"), coalesce(notes, "Order picked up"));
+        removeFromQueue(order.getBranchId(), orderId, "ready");
         broadcast(order.getBranchId(), "COMPLETED", orderId);
         deleteOrder(orderId);
         log.info("Order {} picked up → COMPLETED", orderId);
@@ -172,23 +185,33 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
         redisTemplate.delete(ORDER_KEY + orderId);
     }
 
-    private List<KitchenDtos.KitchenOrder> fetchByStatus(String branchId, String status) {
-        Set<String> orderIds = redisTemplate.opsForZSet()
-                .rangeByScore(branchStatusKey(branchId, status), Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY);
-        if (orderIds == null || orderIds.isEmpty()) return new ArrayList<>();
+    private KitchenDtos.StatusGroup fetchByStatus(String branchId, String status, int page, int size) {
+        String key = branchStatusKey(branchId, status);
+        long total = redisTemplate.opsForZSet()
+                .count(key, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY);
 
-        return orderIds.stream()
-                .map(id -> {
-                    try {
-                        String json = redisTemplate.opsForValue().get(ORDER_KEY + id);
-                        return json != null ? objectMapper.readValue(json, KitchenDtos.KitchenOrder.class) : null;
-                    } catch (Exception e) {
-                        log.warn("Could not deserialize order {}: {}", id, e.getMessage());
-                        return null;
-                    }
-                })
-                .filter(o -> o != null)
-                .collect(Collectors.toList());
+        long offset = (long) page * size;
+        Set<String> orderIds = redisTemplate.opsForZSet()
+                .rangeByScore(key, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, offset, size);
+
+        List<KitchenDtos.KitchenOrder> orders = new ArrayList<>();
+        if (orderIds != null) {
+            for (String id : orderIds) {
+                try {
+                    String json = redisTemplate.opsForValue().get(ORDER_KEY + id);
+                    if (json != null) orders.add(objectMapper.readValue(json, KitchenDtos.KitchenOrder.class));
+                } catch (Exception e) {
+                    log.warn("Could not deserialize order {}: {}", id, e.getMessage());
+                }
+            }
+        }
+
+        return KitchenDtos.StatusGroup.builder()
+                .total(total)
+                .page(page)
+                .size(size)
+                .orders(orders)
+                .build();
     }
 
     private void moveInZSet(String branchId, String orderId, String fromStatus, String toStatus, double score) {
@@ -216,14 +239,17 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
             HttpHeaders headers = new HttpHeaders();
             headers.set("X-User-Id", "kitchen-service");
             headers.set("X-User-Role", "KITCHEN_STAFF");
-            restTemplate.exchange(
-                    "http://order-service/api/v1/orders/{orderId}/status",
-                    HttpMethod.PUT,
-                    new HttpEntity<>(body, headers),
-                    Void.class,
-                    orderId);
+            String url = orderServiceUrl + "/api/v1/orders/{orderId}/status";
+            log.debug("Calling order-service: PUT {}", url.replace("{orderId}", orderId));
+            directRestTemplate.exchange(url, HttpMethod.PUT,
+                    new HttpEntity<>(body, headers), Void.class, orderId);
+        } catch (HttpStatusCodeException e) {
+            log.error("Order-service rejected status update for order={} newStatus={} — HTTP {}: {}",
+                    orderId, newStatus, e.getStatusCode().value(), e.getResponseBodyAsString());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Order-service rejected status update: " + e.getStatusCode().value());
         } catch (Exception e) {
-            log.error("Failed to update order {} status to {} in order-service: {}",
+            log.error("Failed to reach order-service for order={} newStatus={}: {}",
                     orderId, newStatus, e.getMessage());
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                     "Order-service unavailable — status update failed");

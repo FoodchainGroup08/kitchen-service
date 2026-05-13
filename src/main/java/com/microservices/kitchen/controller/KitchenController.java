@@ -41,15 +41,16 @@ public class KitchenController {
     @GetMapping("/queue")
     public ResponseEntity<KitchenDtos.KitchenQueueResponse> getQueueFromHeader(
             @RequestHeader(value = "X-User-BranchId", required = false) String branchIdHeader,
-            @RequestParam(required = false) String branchId) {
-        // query param takes priority, then header
+            @RequestParam(required = false) String branchId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
         String resolvedBranchId = branchId != null ? branchId : branchIdHeader;
         if (resolvedBranchId == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "branchId required (header X-User-BranchId or ?branchId= query param)");
         }
-        log.info("GET kitchen queue branchId={} (from header/param)", resolvedBranchId);
-        return ResponseEntity.ok(kitchenQueueService.getQueue(resolvedBranchId));
+        log.info("GET kitchen queue branchId={} page={} size={} (from header/param)", resolvedBranchId, page, size);
+        return ResponseEntity.ok(kitchenQueueService.getQueue(resolvedBranchId, page, size));
     }
 
     // ── GET /kitchen/queue/{branchId} ─────────────────────────────────────────
@@ -66,9 +67,13 @@ public class KitchenController {
     @GetMapping("/queue/{branchId}")
     public ResponseEntity<KitchenDtos.KitchenQueueResponse> getQueue(
             @Parameter(description = "UUID of the branch whose queue to fetch", required = true)
-            @PathVariable String branchId) {
-        log.info("GET kitchen queue branchId={}", branchId);
-        return ResponseEntity.ok(kitchenQueueService.getQueue(branchId));
+            @PathVariable String branchId,
+            @Parameter(description = "Zero-based page number (default 0)")
+            @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Max orders per status column (default 20)")
+            @RequestParam(defaultValue = "20") int size) {
+        log.info("GET kitchen queue branchId={} page={} size={}", branchId, page, size);
+        return ResponseEntity.ok(kitchenQueueService.getQueue(branchId, page, size));
     }
 
     // ── POST /kitchen/orders/{orderId}/accept ─────────────────────────────────
