@@ -1,265 +1,303 @@
-# kitchen-service
+# Kitchen Service
 
-Spring Boot microservice for the FoodChain kitchen display system (KDS). Kitchen staff use this service to monitor the live order queue and drive each order through its preparation lifecycle. There is no database — all queue state lives in Redis. Orders arrive via Kafka events published by `order-service`, and every status change is broadcast to kitchen displays in real time over WebSocket (STOMP).
+Real-time Kitchen Display System (KDS) for FoodChain. Kitchen staff use this service to monitor the live order queue and drive each order through its preparation lifecycle. All queue state lives in Redis — there is no database. Orders arrive automatically via Kafka events published by `order-service`, and every status change is broadcast to kitchen screens over WebSocket (STOMP).
 
-## Port
-
-`8084` (context path `/api`). Full base URL: `http://localhost:8084/api`
-
----
-
-## Queue Workflow
-
-```
-[Kafka: order.received]
-        |
-        v
-    RECEIVED  ──── POST /kitchen/orders/{id}/accept ────> PREPARING
-    (new)          PATCH /kitchen/orders/{id}/status           |
-                         { "newStatus": "PREPARING" }          |
-                                                    POST /kitchen/orders/{id}/ready
-                                                    PATCH /kitchen/orders/{id}/status
-                                                          { "newStatus": "READY" }
-                                                               |
-                                                               v
-                                                           READY
-                                                        /          \
-                              POST .../serve            /            \  POST .../pickup
-                              PATCH .../status         /              \ PATCH .../status
-                               { "newStatus":         /                \ { "newStatus":
-                                 "SERVED" }          v                  v  "PICKED_UP" }
-                                               COMPLETED            COMPLETED
-                                               (dine-in)         (takeaway/delivery)
-```
-
-COMPLETED orders are removed from Redis entirely; `order-service` is called over REST to persist the final status.
+**Base URL (via gateway):** `http://<gateway-host>/api`  
+**Direct port:** `8084`  
+**WebSocket endpoint:** `ws://<gateway-host>/ws-notifications` (STOMP)
 
 ---
 
-## Endpoints
+## Authentication
 
-All paths are relative to the context root `/api`. The service is registered with Eureka as `kitchen-service` and is reachable through the API gateway.
+All endpoints require a valid JWT:
 
-### GET /kitchen/queue
+```
+Authorization: Bearer <token>
+```
 
-Frontend-friendly endpoint — resolves `branchId` from the gateway-injected JWT header or an explicit query param.
+The gateway extracts `branchId` from the JWT claims and sets the `X-User-BranchId` header automatically. Kitchen staff do not need to pass `branchId` manually — it comes from their login token.
 
-| Detail | Value |
-|---|---|
-| Priority | `?branchId=` query param first, then `X-User-BranchId` header |
-| Auth | Bearer JWT (forwarded by gateway) |
+---
 
-**Request headers / params**
+## How Orders Flow In
 
-| Name | Type | Required | Description |
-|---|---|---|---|
-| `X-User-BranchId` | header | conditional | Branch UUID set by the gateway from the JWT |
-| `branchId` | query param | conditional | Overrides the header when both are present |
+```
+Customer places order
+      ↓
+order-service publishes Kafka event  →  kitchen-service consumes it
+                                                ↓
+                                    Order appears in RECEIVED queue
+                                                ↓
+                                    Kitchen staff accept → PREPARING
+                                                ↓
+                                    Kitchen staff mark ready → READY
+                                                ↓
+                                    Serve (dine-in) or Pickup (takeaway/delivery)
+```
 
-**Response 200**
+The kitchen never creates orders — it only reacts to them.
+
+---
+
+## All Endpoints at a Glance
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/kitchen/queue` | Live queue (branchId from JWT) |
+| GET | `/v1/kitchen/queue/{branchId}` | Live queue for a specific branch |
+| POST | `/v1/kitchen/orders/{orderId}/accept` | Accept order → PREPARING |
+| POST | `/v1/kitchen/orders/{orderId}/ready` | Mark prepared → READY |
+| POST | `/v1/kitchen/orders/{orderId}/serve` | Complete dine-in order |
+| POST | `/v1/kitchen/orders/{orderId}/pickup` | Complete takeaway/delivery |
+| PATCH | `/v1/kitchen/orders/{orderId}/status` | Unified status update |
+
+---
+
+## Queue
+
+### GET `/v1/kitchen/queue`
+
+Returns the live queue for the authenticated user's branch. `branchId` is read from the `X-User-BranchId` header set by the gateway.
+
+### GET `/v1/kitchen/queue/{branchId}`
+
+Returns the live queue for a specific branch. Use this when the caller's token does not have a `branchId` claim (e.g. admin viewing any branch).
+
+**Query params (both endpoints):**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `page` | integer | `0` | Page within each status group |
+| `size` | integer | `50` | Items per page within each group |
+
+**Response `200`:**
 ```json
 {
-  "branchId": "uuid",
-  "received":  [ { ...KitchenOrder } ],
-  "preparing": [ { ...KitchenOrder } ],
-  "ready":     [ { ...KitchenOrder } ]
+  "branchId": "00e03993-6425-4703-a38f-cc661ceedf44",
+  "page": 0,
+  "size": 50,
+  "received": {
+    "total": 12,
+    "page": 0,
+    "size": 50,
+    "orders": [ { "...KitchenOrder..." } ]
+  },
+  "preparing": {
+    "total": 5,
+    "page": 0,
+    "size": 50,
+    "orders": [ { "...KitchenOrder..." } ]
+  },
+  "ready": {
+    "total": 3,
+    "page": 0,
+    "size": 50,
+    "orders": [ { "...KitchenOrder..." } ]
+  }
 }
 ```
 
-**Response 400** — neither header nor query param provided.
-
----
-
-### GET /kitchen/queue/{branchId}
-
-Legacy path-variable variant kept for backward compatibility.
-
-| Detail | Value |
-|---|---|
-| Path variable | `branchId` — UUID of the branch |
-| Auth | Bearer JWT |
-
-**Response 200** — same shape as above.
-
----
-
-### PATCH /kitchen/orders/{orderId}/status
-
-Unified status-update endpoint consumed by the frontend.
-
-**Request body**
+**KitchenOrder object:**
 ```json
 {
-  "newStatus": "PREPARING | READY | SERVED | PICKED_UP",
-  "staffId": "optional-staff-id",
-  "notes": "optional notes"
+  "orderId": "b1c2d3e4-...",
+  "id": "b1c2d3e4-...",
+  "customerId": "customer-uuid",
+  "customerName": "Omar Al-Hassan",
+  "branchId": "00e03993-...",
+  "orderType": "DINE_IN",
+  "displayOrderType": "dine-in",
+  "tableNumber": "T5",
+  "notes": "No onions please",
+  "totalAmount": 68.00,
+  "status": "RECEIVED",
+  "displayStatus": "received",
+  "items": [
+    {
+      "menuItemId": "item-uuid",
+      "id": "item-uuid",
+      "menuItemName": "Kabsa Chicken",
+      "name": "Kabsa Chicken",
+      "quantity": 2,
+      "specialInstructions": "Extra spicy"
+    }
+  ],
+  "receivedAt": "2026-05-13T10:00:00",
+  "acceptedAt": null,
+  "readyAt": null
 }
 ```
 
-| `newStatus` | Transition | Delegates to |
-|---|---|---|
-| `PREPARING` | RECEIVED -> PREPARING | `acceptOrder` |
-| `READY` | PREPARING -> READY | `markReady` |
-| `SERVED` | READY -> COMPLETED (dine-in) | `serveOrder` |
-| `PICKED_UP` | READY -> COMPLETED (takeaway/delivery) | `pickupOrder` |
+**Field notes:**
 
-Values are matched case-insensitively.
-
-**Responses**
-
-| Code | Meaning |
-|---|---|
-| 200 | `KitchenOrder` with updated state |
-| 400 | `newStatus` is not one of the four valid values |
-| 404 | Order not found in the Redis queue |
-| 409 | Invalid state transition (e.g. order is not in the expected status) |
-| 502 | `order-service` call failed |
+| Field | Notes |
+|-------|-------|
+| `orderId` / `id` | Same value — both exist for compatibility. Use either. |
+| `status` | Internal uppercase: `"RECEIVED"`, `"PREPARING"`, `"READY"` |
+| `displayStatus` | Frontend-friendly lowercase: `"received"`, `"preparing"`, `"ready"` |
+| `orderType` | Internal: `"DINE_IN"`, `"TAKEAWAY"`, `"DELIVERY"` |
+| `displayOrderType` | Frontend-friendly: `"dine-in"`, `"takeaway"`, `"delivery"` |
+| `menuItemId` / `id` | Same value on items — both exist for compatibility. |
+| `menuItemName` / `name` | Same value on items — both exist for compatibility. |
+| `acceptedAt` | Set when kitchen accepts; `null` until then |
+| `readyAt` | Set when kitchen marks ready; `null` until then |
 
 ---
 
-### POST /kitchen/orders/{orderId}/accept
+## Kitchen Actions
 
-Moves an order from RECEIVED -> PREPARING.
+All action endpoints accept an **optional** JSON body. If the body is omitted entirely the action still succeeds.
 
-**Request body** (optional)
+**Optional request body:**
 ```json
-{ "staffId": "...", "notes": "..." }
-```
-
-**Responses** — 200 KitchenOrder / 404 / 409 / 502
-
----
-
-### POST /kitchen/orders/{orderId}/ready
-
-Moves an order from PREPARING -> READY.
-
-**Responses** — 200 KitchenOrder / 404 / 409 / 502
-
----
-
-### POST /kitchen/orders/{orderId}/serve
-
-Completes a dine-in order (READY -> COMPLETED). Removes from queue.
-
-**Responses** — 200 KitchenOrder / 404 / 409 / 502
-
----
-
-### POST /kitchen/orders/{orderId}/pickup
-
-Completes a takeaway or delivery order (READY -> COMPLETED). Removes from queue.
-
-**Responses** — 200 KitchenOrder / 404 / 409 / 502
-
----
-
-## KitchenOrder Shape
-
-```typescript
 {
-  orderId: string;           // internal storage key
-  id: string;                // alias for orderId (frontend-friendly)
-  status: string;            // uppercase internally: RECEIVED | PREPARING | READY
-  displayStatus: string;     // lowercase for frontend: "received" | "preparing" | "ready"
-  orderType: string;         // uppercase internally: DINE_IN | TAKEAWAY | DELIVERY
-  displayOrderType: string;  // hyphenated lowercase: "dine-in" | "takeaway" | "delivery"
-  tableNumber?: string;
-  customerName?: string;
-  customerId: string;
-  branchId: string;
-  totalAmount: number;
-  receivedAt: string;        // ISO-8601 LocalDateTime
-  acceptedAt?: string;
-  readyAt?: string;
-  items: Array<{
-    menuItemId: string;
-    id: string;              // alias for menuItemId
-    menuItemName: string;
-    name: string;            // alias for menuItemName
-    quantity: number;
-    specialInstructions?: string;
-  }>;
+  "staffId": "staff-001",
+  "notes": "Table 5 prefers well done"
 }
 ```
 
 ---
 
-## Real-Time WebSocket (STOMP)
+### POST `/v1/kitchen/orders/{orderId}/accept`
 
-The service broadcasts a lightweight update message to `/topic/kitchen/{branchId}` whenever any order in that branch changes status.
+Moves an order from **RECEIVED → PREPARING**. Also updates the order status in `order-service` (CONFIRMED → PREPARING).
 
-```
-Endpoint : ws://localhost:8084/api/ws   (or via gateway)
-Protocol : STOMP over WebSocket
-Topic    : /topic/kitchen/{branchId}
-```
+**Response `200`:** updated `KitchenOrder` with `"status": "PREPARING"` and `"acceptedAt"` populated.
 
-**Message payload**
 ```json
-{ "orderId": "uuid", "status": "PREPARING" }
+{
+  "orderId": "b1c2d3e4-...",
+  "id": "b1c2d3e4-...",
+  "status": "PREPARING",
+  "displayStatus": "preparing",
+  "acceptedAt": "2026-05-13T10:05:00",
+  "readyAt": null
+}
 ```
 
-Connect and subscribe in the frontend:
-```javascript
-const client = new Client({ brokerURL: 'ws://gateway/api/ws' });
-client.onConnect = () => {
-  client.subscribe(`/topic/kitchen/${branchId}`, frame => {
-    const { orderId, status } = JSON.parse(frame.body);
-    // refresh the queue or update the specific card
-  });
-};
+---
+
+### POST `/v1/kitchen/orders/{orderId}/ready`
+
+Moves an order from **PREPARING → READY**. Also updates the order status in `order-service` to READY.
+
+**Response `200`:** updated `KitchenOrder` with `"status": "READY"` and `"readyAt"` populated.
+
+```json
+{
+  "orderId": "b1c2d3e4-...",
+  "status": "READY",
+  "displayStatus": "ready",
+  "acceptedAt": "2026-05-13T10:05:00",
+  "readyAt": "2026-05-13T10:18:00"
+}
+```
+
+---
+
+### POST `/v1/kitchen/orders/{orderId}/serve`
+
+Completes a **dine-in** order. Use this when food has been brought to the table. Removes the order from the kitchen queue and updates `order-service` to SERVED.
+
+**Response `200`:** final `KitchenOrder` state (order is removed from queue after this call).
+
+---
+
+### POST `/v1/kitchen/orders/{orderId}/pickup`
+
+Completes a **takeaway or delivery** order. Use this when the customer has collected or the rider has picked up. Removes the order from the queue and updates `order-service` to PICKED_UP.
+
+**Response `200`:** final `KitchenOrder` state.
+
+---
+
+### PATCH `/v1/kitchen/orders/{orderId}/status`
+
+Unified endpoint that accepts any valid target status. Use this if you want a single endpoint instead of the individual action endpoints.
+
+**Request body:**
+```json
+{
+  "newStatus": "PREPARING",
+  "staffId": "staff-001",
+  "notes": "Accepted by Ahmed"
+}
+```
+
+| `newStatus` value | Effect |
+|-------------------|--------|
+| `"PREPARING"` | Same as `/accept` |
+| `"READY"` | Same as `/ready` |
+| `"SERVED"` | Same as `/serve` (dine-in) |
+| `"PICKED_UP"` | Same as `/pickup` (takeaway/delivery) |
+
+**Response `200`:** updated `KitchenOrder`.
+
+---
+
+## WebSocket — Real-Time Updates
+
+Connect to the STOMP broker to receive live kitchen events without polling.
+
+**Endpoint:** `ws://<gateway-host>/ws-notifications`  
+**Subscribe topic:** `/topic/kitchen/{branchId}`
+
+**Example (JavaScript with STOMP.js):**
+```js
+import { Client } from '@stomp/stompjs';
+
+const client = new Client({
+  brokerURL: 'ws://54.235.78.18:8080/ws-notifications',
+  onConnect: () => {
+    client.subscribe(`/topic/kitchen/${branchId}`, (msg) => {
+      const event = JSON.parse(msg.body);
+      console.log(event); // KitchenOrder or SLAAlert
+    });
+  },
+});
 client.activate();
 ```
 
 ---
 
-## Redis Usage
+## SLA Alerts
 
-No relational database. All state is ephemeral in Redis with a 24-hour TTL.
+If an order has been waiting too long, the kitchen service automatically broadcasts an alert to the WebSocket topic.
 
-| Key pattern | Type | Content |
-|---|---|---|
-| `kitchen:order:{orderId}` | String (JSON) | Full `KitchenOrder` object |
-| `kitchen:branch:{branchId}:received` | Sorted Set | Order IDs scored by `receivedAt` epoch ms |
-| `kitchen:branch:{branchId}:preparing` | Sorted Set | Order IDs scored by `acceptedAt` epoch ms |
-| `kitchen:branch:{branchId}:ready` | Sorted Set | Order IDs scored by `readyAt` epoch ms |
+**SLA thresholds:**
+- **AMBER** — order waiting > 15 minutes
+- **RED** — order waiting > 25 minutes
 
-Orders are fetched from the sorted sets oldest-first (lowest score = earliest timestamp).
-
----
-
-## Kafka Consumer Topics
-
-| Topic | Event | Action |
-|---|---|---|
-| `order.received` | `OrderReceivedEvent` | Enqueues order into Redis as RECEIVED; broadcasts via WebSocket |
-
-**Consumer group:** `kitchen-service-group`
-
----
-
-## Environment Variables / Configuration
-
-| Variable | Default | Description |
-|---|---|---|
-| `SPRING_DATA_REDIS_HOST` | `localhost` | Redis hostname |
-| `SPRING_DATA_REDIS_PORT` | `6379` | Redis port |
-| `SPRING_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka broker(s) |
-| `EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE` | `http://localhost:8761/eureka/` | Eureka registry |
-| `SPRING_CONFIG_IMPORT` | `optional:configserver:http://localhost:8888` | Spring Cloud Config Server |
-| `SERVER_PORT` | `8084` | HTTP port |
-
-Config is also loaded from the central **config-server** (`kitchen-service.yml` in `foodchain-config`).
-
----
-
-## Running Locally
-
-Prerequisites: Redis, Kafka, Eureka, and optionally the config-server must be running.
-
-```bash
-./mvnw spring-boot:run
+**Alert message shape:**
+```json
+{
+  "orderId": "b1c2d3e4-...",
+  "branchId": "00e03993-...",
+  "severity": "AMBER",
+  "minutesWaiting": 17,
+  "message": "Order b1c2d3e4 has been waiting 17 minutes"
+}
 ```
 
-Swagger UI is available at `http://localhost:8084/api/swagger-ui.html`.
+---
+
+## Error Responses
+
+```json
+{
+  "success": false,
+  "status": 404,
+  "message": "Order not found in queue: <orderId>",
+  "error": "Not Found",
+  "path": "/api/v1/kitchen/orders/.../accept",
+  "timestamp": "2026-05-13T10:00:00Z"
+}
+```
+
+| Status | When |
+|--------|------|
+| `400` | Bad request — missing branchId or invalid status transition |
+| `401` | Missing or expired JWT |
+| `404` | Order not found in the Redis queue |
+| `500` | Unexpected server error |
