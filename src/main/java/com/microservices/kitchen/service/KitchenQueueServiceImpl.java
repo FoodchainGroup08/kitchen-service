@@ -187,30 +187,41 @@ public class KitchenQueueServiceImpl implements KitchenQueueService {
 
     private KitchenDtos.StatusGroup fetchByStatus(String branchId, String status, int page, int size) {
         String key = branchStatusKey(branchId, status);
-        long total = redisTemplate.opsForZSet()
-                .count(key, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY);
 
-        long offset = (long) page * size;
-        Set<String> orderIds = redisTemplate.opsForZSet()
-                .rangeByScore(key, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, offset, size);
+        // Fetch all IDs from the ZSet so we can skip stale ones and paginate correctly
+        Set<String> allIds = redisTemplate.opsForZSet()
+                .rangeByScore(key, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY);
 
-        List<KitchenDtos.KitchenOrder> orders = new ArrayList<>();
-        if (orderIds != null) {
-            for (String id : orderIds) {
+        List<KitchenDtos.KitchenOrder> valid = new ArrayList<>();
+        if (allIds != null) {
+            for (String id : allIds) {
                 try {
                     String json = redisTemplate.opsForValue().get(ORDER_KEY + id);
-                    if (json != null) orders.add(objectMapper.readValue(json, KitchenDtos.KitchenOrder.class));
+                    if (json != null) {
+                        valid.add(objectMapper.readValue(json, KitchenDtos.KitchenOrder.class));
+                    } else {
+                        // Detail key expired — remove orphaned ZSet entry
+                        redisTemplate.opsForZSet().remove(key, id);
+                        log.debug("Removed stale ZSet entry {} from {}", id, key);
+                    }
                 } catch (Exception e) {
                     log.warn("Could not deserialize order {}: {}", id, e.getMessage());
                 }
             }
         }
 
+        long total = valid.size();
+        int offset = page * size;
+        List<KitchenDtos.KitchenOrder> pageOrders = valid.stream()
+                .skip(offset)
+                .limit(size)
+                .collect(Collectors.toList());
+
         return KitchenDtos.StatusGroup.builder()
                 .total(total)
                 .page(page)
                 .size(size)
-                .orders(orders)
+                .orders(pageOrders)
                 .build();
     }
 
